@@ -65,7 +65,7 @@ bot.action('register_start', async ctx => {
   mem.set(ctx.chat!.id, 'awaiting_name');
   await ctx.answerCbQuery();
   await ctx.reply(
-    '신규 직원 등록을 위해 성함을 입력해 주세요. (취소: /cancel)',
+    '신규 직원 등록을 위해 성함을 입력해 주세요.',
     Markup.inlineKeyboard([[Markup.button.callback('뒤로 가기', 'go_back')]])
   );
 });
