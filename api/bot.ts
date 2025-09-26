@@ -47,22 +47,33 @@ async function saveRow(chatId: string, name: string) {
 const TRIGGER = /^(?:\/start|hi|hello|안녕|하이)\s*$/i;
 const mem = new Map<number, string>();
 
-bot.start(ctx =>
-  ctx.reply('안녕하세요. 하이파이코리아입니다. 무엇을 도와드릴까요?',
-    Markup.inlineKeyboard([Markup.button.callback('신규 직원 등록', 'register_start')])
-  )
-);
+// ▶ 메뉴 헬퍼 (여기에 "뒤로 가기" 추가)
+function replyMenu(ctx: any) {
+  return ctx.reply(
+    '안녕하세요. 하이파이코리아입니다. 무엇을 도와드릴까요?',
+    Markup.inlineKeyboard([
+      [
+        Markup.button.callback('신규 직원 등록', 'register_start'),
+        Markup.button.callback('뒤로 가기', 'go_back'),
+      ],
+    ])
+  );
+}
 
-bot.hears(TRIGGER, ctx =>
-  ctx.reply('안녕하세요. 하이파이코리아입니다. 무엇을 도와드릴까요?',
-    Markup.inlineKeyboard([Markup.button.callback('신규 직원 등록', 'register_start')])
-  )
-);
+bot.start(ctx => replyMenu(ctx));
+bot.hears(TRIGGER, ctx => replyMenu(ctx));
 
 bot.action('register_start', async ctx => {
   mem.set(ctx.chat!.id, 'awaiting_name');
   await ctx.answerCbQuery();
   await ctx.reply('신규 직원 등록을 위해 성함을 입력해 주세요. (취소: /cancel)');
+});
+
+// ▶ "뒤로 가기" 처리: 상태 초기화 후 메뉴 재표시
+bot.action('go_back', async ctx => {
+  mem.delete(ctx.chat!.id);
+  await ctx.answerCbQuery();
+  await replyMenu(ctx);
 });
 
 bot.command('cancel', async ctx => {
@@ -78,6 +89,8 @@ bot.on('text', async ctx => {
     await saveRow(String(ctx.chat!.id), name);
     mem.delete(ctx.chat!.id);
     await ctx.reply(`등록 완료 ✅\n이름: ${name}\nChat ID: ${ctx.chat!.id}`);
+    // 완료 후 메뉴로 복귀하면 UX 좋음
+    await replyMenu(ctx);
   }
 });
 
