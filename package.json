@@ -1,0 +1,9 @@
+{
+  "name": "tg-sheets-bot",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "googleapis": "^129.0.0",
+    "telegraf": "^4.15.0"
+  }
+}
