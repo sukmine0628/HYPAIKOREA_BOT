@@ -43,7 +43,7 @@ async function saveRow(chatId: string, name: string) {
   }
 }
 
-const TRIGGER = /^(?:\/start|hi|hello|안녕|하이)\s*$/i;
+const TRIGGER = /^(?:\/start|hi|hello|안녕|하이|헬로)\s*$/i;
 const mem = new Map<number, string>();
 
 function replyMenu(ctx: any) {
@@ -105,3 +105,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
   return res.status(200).send('ok');
 }
+
+
+
+// ⬇️ 이 블록을 다른 핸들러들(hears/action) 근처에 "그대로" 붙여 넣으세요.
+bot.command('name', async ctx => {
+  try {
+    const full = ctx.message?.text || '';
+    const name = full.replace(/^\/name(@\S+)?\s*/i, '').trim().replace(/\s+/g, ' ').slice(0, 50);
+    if (!name) {
+      return ctx.reply('이렇게 입력해 주세요: `/name 홍길동`', { parse_mode: 'Markdown' });
+    }
+    await saveRow(String(ctx.chat!.id), name);
+    await ctx.reply(`등록 완료 ✅\n이름: ${name}\nChat ID: ${ctx.chat!.id}`);
+    await replyMenu(ctx);
+  } catch (e) {
+    console.error('NAME_CMD_ERROR:', e);
+    await ctx.reply('등록 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.');
+  }
+});
