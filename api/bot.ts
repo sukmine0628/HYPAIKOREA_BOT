@@ -4,37 +4,33 @@ import { google } from 'googleapis';
 
 const bot = new Telegraf(process.env.BOT_TOKEN!);
 
-// 🔎 런타임 ENV 확인용
-bot.use(async (ctx, next) => {
-  const email = (process.env.GS_CLIENT_EMAIL || '').trim();
-  const pk = process.env.GS_PRIVATE_KEY || '';
+// ===== 크리덴셜(JSON) 파싱 후 Google Sheets 클라이언트 준비 =====
+const creds = JSON.parse(process.env.GOOGLE_CREDENTIALS!);
+
+// 런타임 점검 로그
+bot.use(async (_ctx, next) => {
   console.log('CREDS_CHECK', {
-    env: process.env.VERCEL_ENV,               // 'production' | 'preview' | 'development'
-    email,
-    emailHasSpace: /\s/.test(email),
-    pkHasBegin: pk.includes('BEGIN PRIVATE KEY'),
-    pkHasEnd: pk.includes('END PRIVATE KEY'),
-    pkLines: pk.split('\n').length,
+    env: process.env.VERCEL_ENV,
+    email: creds?.client_email,
+    hasPrivateKey: !!creds?.private_key,
+    pkLines: (creds?.private_key || '').split('\n').length,
   });
   return next();
 });
 
-// Google Sheets auth (멀티라인 PEM 그대로 사용)
-const auth = new google.auth.JWT(
-  process.env.GS_CLIENT_EMAIL,
-  undefined,
-  process.env.GS_PRIVATE_KEY,
-  ['https://www.googleapis.com/auth/spreadsheets']
-);
+const auth = new google.auth.JWT({
+  email: creds.client_email,
+  key:   creds.private_key, // 멀티라인 PEM
+  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+});
 const sheets = google.sheets({ version: 'v4', auth });
 
-const SHEET_ID = process.env.GS_SHEET_ID!;
+const SHEET_ID = process.env.GS_SHEET_ID!; // <- 시트 ID는 기존대로 사용
 const SHEET_NAME = 'Chat_ID';
 
-// ===== Helpers =====
+// ===== 저장 헬퍼 =====
 async function saveRow(chatId: string, name: string) {
-  // 콜드스타트 대비: 매 호출 인증 보장
-  await auth.authorize();
+  await auth.authorize(); // 콜드스타트 대비
 
   const ts = new Date().toISOString().replace('T', ' ').slice(0, 19);
 
@@ -66,7 +62,6 @@ async function saveRow(chatId: string, name: string) {
       });
     }
   } catch (err: any) {
-    // 🔎 디버그용 상세 로그
     const gErr = err?.response?.data || err;
     console.error('SHEETS_ERROR', {
       message: err?.message,
@@ -74,7 +69,7 @@ async function saveRow(chatId: string, name: string) {
       status: gErr?.error?.status,
       details: gErr?.error?.message || gErr,
     });
-    throw err; // 상위에서 사용자 안내
+    throw err;
   }
 }
 
@@ -90,10 +85,7 @@ function replyMenu(ctx: any) {
   );
 }
 
-// ForceReply 프롬프트 문구 (답장 여부 판별용)
 const REGISTER_PROMPT = '신규 직원 등록을 위해 성함을 입력해 주세요.';
-
-// ===== Triggers / Actions =====
 const TRIGGER = /^(?:\/start|start|hi|hello|안녕|하이|헬로)\s*$/i;
 
 bot.start(ctx => replyMenu(ctx));
@@ -122,47 +114,37 @@ bot.command('cancel', async ctx => {
   await ctx.reply('취소되었습니다. /start 로 다시 시작하세요.');
 });
 
-// 텍스트 처리: 트리거 우선 → 등록 프롬프트 답장 처리 → 기타 안내
+// 텍스트 처리
 bot.on('text', async ctx => {
   try {
     const text  = String((ctx.message as any)?.text || '');
     const asked = (ctx.message as any)?.reply_to_message?.text || '';
 
-    // 1) 트리거 텍스트(/start, hi 등) → 메뉴
-    if (TRIGGER.test(text)) {
-      return replyMenu(ctx);
-    }
+    if (TRIGGER.test(text)) return replyMenu(ctx);
 
-    // 2) 등록 프롬프트에 대한 '답장' → 시트 저장
     if (asked.startsWith(REGISTER_PROMPT)) {
       const name = text.trim().replace(/\s+/g, ' ').slice(0, 50);
       if (!name) return;
-
       await saveRow(String(ctx.chat!.id), name);
       await ctx.reply(`등록 완료 ✅\n이름: ${name}\nChat ID: ${ctx.chat!.id}`);
       return replyMenu(ctx);
     }
 
-    // 3) 기타 일반 텍스트
     await ctx.reply('메뉴로 돌아가려면 /start 를 입력하세요.');
   } catch (err: any) {
-    // 사용자에겐 짧게, 로그엔 자세히
     console.error('TEXT_HANDLER_ERROR', err?.response?.data || err);
-    const hint = err?.response?.data?.error?.message || err?.message || 'unknown';
     await ctx.reply('처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.');
-    // 디버그가 필요하면 아래 주석 해제
-    // await ctx.reply(`(디버그) 오류: ${hint}`);
   }
 });
 
-// ===== Vercel Handler =====
+// ===== Vercel API 핸들러 =====
 export default async function handler(req: any, res: any) {
   try {
     if (req.method === 'POST') {
       await bot.handleUpdate(req.body as any);
       return res.status(200).send('ok');
     }
-    return res.status(200).send('ok'); // 헬스체크
+    return res.status(200).send('ok');
   } catch (e) {
     console.error('HANDLER_ERROR', e);
     return res.status(200).send('ok');
