@@ -140,7 +140,7 @@ bot.on('text', async ctx => {
       const name = text.trim().replace(/\s+/g, ' ').slice(0, 50);
       if (!name) return;
       await saveRow(String(ctx.chat!.id), name);
-      await ctx.reply(`신규 직원 등록이 완료되었습니다 🙇\n이름: ${name}\nChat ID: ${ctx.chat!.id}`);
+      await ctx.reply(`${name}님 신규 직원 등록이 완료되었습니다 🙇`);
       return replyMenu(ctx);
     }
 
