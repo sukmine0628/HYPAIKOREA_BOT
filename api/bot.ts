@@ -86,7 +86,7 @@ function replyMenu(ctx: any) {
 }
 
 const REGISTER_PROMPT = '신규 직원 등록을 위해 성함을 입력해 주세요.';
-const TRIGGER = /^(?:\/start|start|hi|hello|안녕|하이|헬로)\s*$/i;
+const TRIGGER = /^(?:\|start|hi|hello|안녕|하이|헬로)\s*$/i;
 
 bot.start(ctx => replyMenu(ctx));
 bot.hears(TRIGGER, ctx => replyMenu(ctx));
@@ -140,11 +140,11 @@ bot.on('text', async ctx => {
       const name = text.trim().replace(/\s+/g, ' ').slice(0, 50);
       if (!name) return;
       await saveRow(String(ctx.chat!.id), name);
-      await ctx.reply(`등록 완료 ✅\n이름: ${name}\nChat ID: ${ctx.chat!.id}`);
+      await ctx.reply(`신규 직원 등록이 완료되었습니다 🙇\n이름: ${name}\nChat ID: ${ctx.chat!.id}`);
       return replyMenu(ctx);
     }
 
-    await ctx.reply('메뉴로 돌아가려면 /start 를 입력하세요.');
+    await ctx.reply('봇을 호출하려면 Hello 를 입력하세요.');
   } catch (err: any) {
     console.error('TEXT_HANDLER_ERROR', err?.response?.data || err);
     await ctx.reply('처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.');
