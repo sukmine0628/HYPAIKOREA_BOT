@@ -79,7 +79,7 @@ function replyMenu(ctx: any) {
     Markup.inlineKeyboard([
       [
         Markup.button.callback('신규 직원 등록', 'register_start'),
-        Markup.button.callback('구매 요청하기', 'purchase_request'),
+        Markup.button.callback('구매 요청 및 승인', 'purchase_menu'),
       ],
     ])
   );
@@ -105,9 +105,23 @@ bot.action('go_back', async ctx => {
   await replyMenu(ctx);
 });
 
-bot.action('purchase_request', async ctx => {
+bot.action('purchase_menu', async ctx => {
   await ctx.answerCbQuery();
-  await ctx.reply('아직 준비 중인 서비스입니다.');
+  await ctx.reply(
+    '구매 메뉴입니다. 원하시는 작업을 선택하세요.',
+    Markup.inlineKeyboard([
+      [
+        Markup.button.callback('구매 요청', 'purchase_request'),
+        Markup.button.callback('구매 승인', 'purchase_approve'),
+      ],
+      [Markup.button.callback('뒤로 가기', 'go_back')],
+    ])
+  );
+});
+
+bot.action('purchase_approve', async ctx => {
+  await ctx.answerCbQuery();
+  await ctx.reply('구매 승인 메뉴입니다. (다음 단계에서 기능 연결)');
 });
 
 bot.command('cancel', async ctx => {
