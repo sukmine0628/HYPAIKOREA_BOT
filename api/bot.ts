@@ -4,7 +4,7 @@ import { google } from 'googleapis';
 
 const bot = new Telegraf(process.env.BOT_TOKEN!);
 
-// ===== 구글 인증 =====
+/** ========== Google Sheets Auth (GOOGLE_CREDENTIALS JSON 사용) ========== */
 const creds = JSON.parse(process.env.GOOGLE_CREDENTIALS!);
 const auth = new google.auth.JWT({
   email: creds.client_email,
@@ -13,14 +13,16 @@ const auth = new google.auth.JWT({
 });
 const sheets = google.sheets({ version: 'v4', auth });
 
-// === 스프레드시트/시트명 ===
+/** ========== 스프레드시트/시트 설정 ========== */
+// 직원 등록 시트
 const EMPLOYEE_SHEET_ID = process.env.GS_SHEET_ID!;
-const PURCHASE_SHEET_ID = process.env.GS_PURCHASE_SHEET_ID || EMPLOYEE_SHEET_ID;
-
 const EMPLOYEE_SHEET = 'Chat_ID';
-const PURCHASE_SHEET = '구매 요청';
 
-// ===== 직원 등록 저장 =====
+// 구매 요청 시트 (별도 스프레드시트면 GS_PURCHASE_SHEET_ID를 환경변수로 추가)
+const PURCHASE_SHEET_ID = process.env.GS_PURCHASE_SHEET_ID || EMPLOYEE_SHEET_ID;
+const PURCHASE_SHEET = '구매요청'; // ❗️탭 이름 공백 없음(권장)
+
+/** ========== 직원 등록 저장 ========== */
 async function saveEmployee(chatId: string, name: string) {
   await auth.authorize();
   const ts = new Date().toISOString().replace('T', ' ').slice(0, 19);
@@ -52,27 +54,36 @@ async function saveEmployee(chatId: string, name: string) {
   }
 }
 
-// ===== 구매 요청 저장(번호 자동 증가 포함) =====
-async function savePurchase(chatId: string, name: string, item: string, qty: string, price: string, reason: string, note: string) {
+/** ========== 구매 요청 저장(구매 번호 자동증가) ========== */
+async function savePurchase(
+  chatId: string,
+  name: string,
+  item: string,
+  qty: string,
+  price: string,
+  reason: string,
+  note: string
+) {
   await auth.authorize();
   const ts = new Date().toISOString().replace('T', ' ').slice(0, 19);
 
-  // 구매 번호 자동 증가
+  // 구매번호 자동 증가
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: PURCHASE_SHEET_ID,
-    range: `'${PURCHASE_SHEET}'!A2:A`,  // <-- 공백 탭 이름은 작은따옴표 필수
+    range: `${PURCHASE_SHEET}!A2:A`,
   });
   const rows = res.data.values || [];
   const last = rows.length > 0 ? rows[rows.length - 1][0] : null;
-  let nextNo = "구매-001";
-  if (last && typeof last === 'string' && last.startsWith("구매-")) {
-    const n = parseInt(last.split("-")[1] || "0", 10);
-    nextNo = `구매-${String((isNaN(n) ? 0 : n) + 1).padStart(3, "0")}`;
+
+  let nextNo = '구매-001';
+  if (last && typeof last === 'string' && last.startsWith('구매-')) {
+    const n = parseInt(last.split('-')[1] || '0', 10);
+    nextNo = `구매-${String((isNaN(n) ? 0 : n) + 1).padStart(3, '0')}`;
   }
 
   await sheets.spreadsheets.values.append({
     spreadsheetId: PURCHASE_SHEET_ID,
-    range: `'${PURCHASE_SHEET}'!A:M`,  // <-- 여기에도 작은따옴표
+    range: `${PURCHASE_SHEET}!A:M`,
     valueInputOption: 'USER_ENTERED',
     requestBody: {
       values: [[
@@ -84,11 +95,11 @@ async function savePurchase(chatId: string, name: string, item: string, qty: str
         price,           // F: 가격
         reason,          // G: 구매사유
         note,            // H: 비고
-        "대기중",        // I: 상태
-        "",              // J: 승인/반려자
-        "",              // K: 반려 사유
+        '대기중',        // I: 상태
+        '',              // J: 승인/반려자
+        '',              // K: 반려 사유
         ts,              // L: 요청 시각
-        ""               // M: 승인/반려 시각
+        ''               // M: 승인/반려 시각
       ]],
     },
   });
@@ -96,7 +107,7 @@ async function savePurchase(chatId: string, name: string, item: string, qty: str
   return nextNo;
 }
 
-// ===== 메뉴 =====
+/** ========== 메뉴 ========== */
 function replyMenu(ctx: any) {
   return ctx.reply(
     '안녕하세요. 하이파이코리아입니다. 무엇을 도와드릴까요?',
@@ -115,19 +126,24 @@ const TRIGGER = /^(?:\/start|start|hi|hello|안녕|하이|헬로)\s*$/i;
 bot.start(ctx => replyMenu(ctx));
 bot.hears(TRIGGER, ctx => replyMenu(ctx));
 
-// ====== 구매 요청 대화 상태 관리 ======
+/** ========== 구매 요청 상태머신 ========== */
 type Stage = 'item' | 'qty' | 'price' | 'reason' | 'note';
-type PurchaseState = { stage: Stage; data: { item?: string; qty?: string; price?: string; reason?: string; note?: string } };
+type PurchaseState = {
+  stage: Stage;
+  data: { item?: string; qty?: string; price?: string; reason?: string; note?: string };
+};
 const purchaseMem = new Map<number, PurchaseState>();
 
 const ask = (ctx: any, message: string) =>
   ctx.reply(message, { reply_markup: { force_reply: true } });
 
+/** 신규 직원 등록 */
 bot.action('register_start', async ctx => {
   await ctx.answerCbQuery();
   await ask(ctx, REGISTER_PROMPT);
 });
 
+/** 구매 메뉴 */
 bot.action('purchase_menu', async ctx => {
   await ctx.answerCbQuery();
   await ctx.reply(
@@ -142,29 +158,32 @@ bot.action('purchase_menu', async ctx => {
   );
 });
 
+/** 구매 요청 시작 */
 bot.action('purchase_request', async ctx => {
   await ctx.answerCbQuery();
   purchaseMem.set(ctx.chat!.id, { stage: 'item', data: {} });
   await ask(ctx, '구매 요청을 시작합니다.\n① 물품명을 입력해 주세요.');
 });
 
+/** (추후) 구매 승인 메뉴 자리 */
 bot.action('purchase_approve', async ctx => {
   await ctx.answerCbQuery();
   await ctx.reply('구매 승인 메뉴입니다. (다음 단계에서 기능 연결)');
 });
 
+/** 뒤로가기 */
 bot.action('go_back', async ctx => {
   purchaseMem.delete(ctx.chat!.id);
   await replyMenu(ctx);
 });
 
-// ===== 텍스트 처리 =====
+/** ========== 텍스트 처리 ========== */
 bot.on('text', async ctx => {
   try {
-    const text  = String((ctx.message as any)?.text || '').trim();
+    const text = String((ctx.message as any)?.text || '').trim();
     const asked = (ctx.message as any)?.reply_to_message?.text || '';
 
-    // 언제든 /cancel
+    // 취소
     if (/^\/cancel$/i.test(text)) {
       purchaseMem.delete(ctx.chat!.id);
       await ctx.reply('취소되었습니다. /start 로 다시 시작하세요.');
@@ -174,7 +193,7 @@ bot.on('text', async ctx => {
     // 메인 트리거
     if (TRIGGER.test(text)) return replyMenu(ctx);
 
-    // 1) 직원등록 흐름
+    // 직원 등록 플로우
     if (asked.startsWith(REGISTER_PROMPT)) {
       const name = text;
       if (!name) return;
@@ -183,7 +202,7 @@ bot.on('text', async ctx => {
       return replyMenu(ctx);
     }
 
-    // 2) 구매요청 흐름 (간단 상태머신)
+    // 구매 요청 플로우
     const state = purchaseMem.get(ctx.chat!.id);
     if (state) {
       const data = state.data;
@@ -230,7 +249,7 @@ bot.on('text', async ctx => {
         data.note = text.slice(0, 300);
         purchaseMem.delete(ctx.chat!.id);
 
-        // 요청자 이름 조회(직원 시트에서)
+        // 요청자 이름 조회
         let requesterName = '';
         try {
           const res = await sheets.spreadsheets.values.get({
@@ -258,14 +277,14 @@ bot.on('text', async ctx => {
     }
 
     // 그 외
-    await ctx.reply('메뉴로 돌아가려면 /start 를 입력하세요. (진행 중인 입력을 취소하려면 /cancel)');
+    await ctx.reply('메뉴로 돌아가려면 /start 를 입력하세요. (진행 중 취소: /cancel)');
   } catch (err: any) {
     console.error('TEXT_HANDLER_ERROR', err?.response?.data || err);
     await ctx.reply('처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.');
   }
 });
 
-// ===== Vercel Handler =====
+/** ========== Vercel API Handler ========== */
 export default async function handler(req: any, res: any) {
   try {
     if (req.method === 'POST') {
