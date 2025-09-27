@@ -14,13 +14,11 @@ const auth = new google.auth.JWT({
 const sheets = google.sheets({ version: 'v4', auth });
 
 // === 스프레드시트/시트명 ===
-// 직원 정보(이미 등록된 스프레드시트 ID)
 const EMPLOYEE_SHEET_ID = process.env.GS_SHEET_ID!;
-// 구매 요청은 따로 쓰고 싶으면 GS_PURCHASE_SHEET_ID 추가, 없으면 위 ID 재사용
 const PURCHASE_SHEET_ID = process.env.GS_PURCHASE_SHEET_ID || EMPLOYEE_SHEET_ID;
 
-const EMPLOYEE_SHEET = 'Chat_ID';   // 직원 탭 이름
-const PURCHASE_SHEET = '구매 요청'; // 구매 요청 탭 이름
+const EMPLOYEE_SHEET = 'Chat_ID';
+const PURCHASE_SHEET = '구매 요청';
 
 // ===== 직원 등록 저장 =====
 async function saveEmployee(chatId: string, name: string) {
@@ -67,9 +65,9 @@ async function savePurchase(chatId: string, name: string, item: string, qty: str
   const rows = res.data.values || [];
   const last = rows.length > 0 ? rows[rows.length - 1][0] : null;
   let nextNo = "구매-001";
-  if (last && last.startsWith("구매-")) {
-    const num = parseInt(last.split("-")[1]) + 1;
-    nextNo = `구매-${String(num).padStart(3, "0")}`;
+  if (last && typeof last === 'string' && last.startsWith("구매-")) {
+    const n = parseInt(last.split("-")[1] || "0", 10);
+    nextNo = `구매-${String((isNaN(n) ? 0 : n) + 1).padStart(3, "0")}`;
   }
 
   await sheets.spreadsheets.values.append({
@@ -78,16 +76,19 @@ async function savePurchase(chatId: string, name: string, item: string, qty: str
     valueInputOption: 'USER_ENTERED',
     requestBody: {
       values: [[
-        nextNo,          // 구매 번호
-        name,            // 요청자 이름
-        chatId,          // 요청자 Chat ID
-        item, qty, price,
-        reason, note,    // 구매사유, 비고
-        "대기중",        // 상태
-        "",              // 승인/반려자
-        "",              // 반려 사유
-        ts,              // 요청 시각
-        ""               // 승인/반려 시각
+        nextNo,          // A: 구매 번호
+        name,            // B: 요청자 이름
+        chatId,          // C: 요청자 Chat ID
+        item,            // D: 물품
+        qty,             // E: 수량
+        price,           // F: 가격
+        reason,          // G: 구매사유
+        note,            // H: 비고
+        "대기중",        // I: 상태
+        "",              // J: 승인/반려자
+        "",              // K: 반려 사유
+        ts,              // L: 요청 시각
+        ""               // M: 승인/반려 시각
       ]],
     },
   });
@@ -114,9 +115,17 @@ const TRIGGER = /^(?:\/start|start|hi|hello|안녕|하이|헬로)\s*$/i;
 bot.start(ctx => replyMenu(ctx));
 bot.hears(TRIGGER, ctx => replyMenu(ctx));
 
+// ====== 구매 요청 대화 상태 관리 ======
+type Stage = 'item' | 'qty' | 'price' | 'reason' | 'note';
+type PurchaseState = { stage: Stage; data: { item?: string; qty?: string; price?: string; reason?: string; note?: string } };
+const purchaseMem = new Map<number, PurchaseState>();
+
+const ask = (ctx: any, message: string) =>
+  ctx.reply(message, { reply_markup: { force_reply: true } });
+
 bot.action('register_start', async ctx => {
   await ctx.answerCbQuery();
-  await ctx.reply(REGISTER_PROMPT, { reply_markup: { force_reply: true } });
+  await ask(ctx, REGISTER_PROMPT);
 });
 
 bot.action('purchase_menu', async ctx => {
@@ -135,8 +144,8 @@ bot.action('purchase_menu', async ctx => {
 
 bot.action('purchase_request', async ctx => {
   await ctx.answerCbQuery();
-  await ctx.reply("구매 요청을 시작합니다.\n물품명을 입력해 주세요.", { reply_markup: { force_reply: true } });
-  // 👉 다음 단계에서 순차 입력(물품→수량→가격→사유→비고) 붙여서 savePurchase 호출 예정
+  purchaseMem.set(ctx.chat!.id, { stage: 'item', data: {} });
+  await ask(ctx, '구매 요청을 시작합니다.\n① 물품명을 입력해 주세요.');
 });
 
 bot.action('purchase_approve', async ctx => {
@@ -144,25 +153,112 @@ bot.action('purchase_approve', async ctx => {
   await ctx.reply('구매 승인 메뉴입니다. (다음 단계에서 기능 연결)');
 });
 
-bot.action('go_back', async ctx => replyMenu(ctx));
+bot.action('go_back', async ctx => {
+  purchaseMem.delete(ctx.chat!.id);
+  await replyMenu(ctx);
+});
 
+// ===== 텍스트 처리 =====
 bot.on('text', async ctx => {
   try {
-    const text  = String((ctx.message as any)?.text || '');
+    const text  = String((ctx.message as any)?.text || '').trim();
     const asked = (ctx.message as any)?.reply_to_message?.text || '';
 
+    // 언제든 /cancel
+    if (/^\/cancel$/i.test(text)) {
+      purchaseMem.delete(ctx.chat!.id);
+      await ctx.reply('취소되었습니다. /start 로 다시 시작하세요.');
+      return;
+    }
+
+    // 메인 트리거
     if (TRIGGER.test(text)) return replyMenu(ctx);
 
-    // 직원 등록 처리
+    // 1) 직원등록 흐름
     if (asked.startsWith(REGISTER_PROMPT)) {
-      const name = text.trim();
+      const name = text;
       if (!name) return;
       await saveEmployee(String(ctx.chat!.id), name);
       await ctx.reply(`${name}님 신규 직원 등록이 완료되었습니다 🙇`);
       return replyMenu(ctx);
     }
 
-    await ctx.reply('메뉴로 돌아가려면 /start 를 입력하세요.');
+    // 2) 구매요청 흐름 (간단 상태머신)
+    const state = purchaseMem.get(ctx.chat!.id);
+    if (state) {
+      const data = state.data;
+
+      if (state.stage === 'item') {
+        data.item = text.slice(0, 100);
+        state.stage = 'qty';
+        await ask(ctx, '② 수량을 입력해 주세요. (숫자만)');
+        return;
+      }
+
+      if (state.stage === 'qty') {
+        const n = text.replace(/[, ]/g, '');
+        if (!/^\d+$/.test(n)) {
+          await ask(ctx, '❗ 숫자만 입력해 주세요. 다시 입력: 수량');
+          return;
+        }
+        data.qty = n;
+        state.stage = 'price';
+        await ask(ctx, '③ 가격을 입력해 주세요. (숫자만, 단위 없이)');
+        return;
+      }
+
+      if (state.stage === 'price') {
+        const n = text.replace(/[, ]/g, '');
+        if (!/^\d+$/.test(n)) {
+          await ask(ctx, '❗ 숫자만 입력해 주세요. 다시 입력: 가격');
+          return;
+        }
+        data.price = n;
+        state.stage = 'reason';
+        await ask(ctx, '④ 구매 사유를 입력해 주세요.');
+        return;
+      }
+
+      if (state.stage === 'reason') {
+        data.reason = text.slice(0, 300);
+        state.stage = 'note';
+        await ask(ctx, '⑤ 비고(선택)를 입력해 주세요. 없으면 "없음"이라고 적어주세요.');
+        return;
+      }
+
+      if (state.stage === 'note') {
+        data.note = text.slice(0, 300);
+        purchaseMem.delete(ctx.chat!.id);
+
+        // 요청자 이름 조회(직원 시트에서)
+        let requesterName = '';
+        try {
+          const res = await sheets.spreadsheets.values.get({
+            spreadsheetId: EMPLOYEE_SHEET_ID,
+            range: `${EMPLOYEE_SHEET}!A2:B`,
+          });
+          const rows = res.data.values || [];
+          const me = rows.find(r => String(r[0]) === String(ctx.chat!.id));
+          requesterName = me?.[1] || '';
+        } catch {}
+
+        const reqNo = await savePurchase(
+          String(ctx.chat!.id),
+          requesterName || `User-${ctx.chat!.id}`,
+          data.item!, data.qty!, data.price!, data.reason!, data.note!
+        );
+
+        await ctx.reply(
+          `구매 요청이 접수되었습니다 ✅\n` +
+          `요청번호: ${reqNo}\n` +
+          `물품: ${data.item}\n수량: ${data.qty}\n가격: ${Number(data.price).toLocaleString()}`
+        );
+        return replyMenu(ctx);
+      }
+    }
+
+    // 그 외
+    await ctx.reply('메뉴로 돌아가려면 /start 를 입력하세요. (진행 중인 입력을 취소하려면 /cancel)');
   } catch (err: any) {
     console.error('TEXT_HANDLER_ERROR', err?.response?.data || err);
     await ctx.reply('처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.');
