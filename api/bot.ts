@@ -4,19 +4,21 @@ import { google } from 'googleapis';
 
 const bot = new Telegraf(process.env.BOT_TOKEN!);
 
+// 🔎 런타임 ENV 확인용
 bot.use(async (ctx, next) => {
   const email = (process.env.GS_CLIENT_EMAIL || '').trim();
   const pk = process.env.GS_PRIVATE_KEY || '';
   console.log('CREDS_CHECK', {
-    env: process.env.VERCEL_ENV,               // 'production' | 'preview' | 'development'
-    email,                                      // 현재 런타임이 읽은 client_email
-    emailHasSpace: /\s/.test(email),            // 앞/뒤 공백 검출
+    env: process.env.VERCEL_ENV,
+    email,
+    emailHasSpace: /\s/.test(email),
     pkHasBegin: pk.includes('BEGIN PRIVATE KEY'),
     pkHasEnd: pk.includes('END PRIVATE KEY'),
-    pkLines: pk.split('\n').length,             // 멀티라인인지 대략 확인
+    pkLines: pk.split('\n').length,
   });
   return next();
 });
+
 
 // Google Sheets auth (멀티라인 PEM을 그대로 사용)
 const auth = new google.auth.JWT(
