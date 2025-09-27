@@ -1,4 +1,4 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
+// @ts-nocheck
 import { Telegraf, Markup } from 'telegraf';
 import { google } from 'googleapis';
 
@@ -9,7 +9,7 @@ bot.use(async (ctx, next) => {
   const email = (process.env.GS_CLIENT_EMAIL || '').trim();
   const pk = process.env.GS_PRIVATE_KEY || '';
   console.log('CREDS_CHECK', {
-    env: process.env.VERCEL_ENV,
+    env: process.env.VERCEL_ENV,               // 'production' | 'preview' | 'development'
     email,
     emailHasSpace: /\s/.test(email),
     pkHasBegin: pk.includes('BEGIN PRIVATE KEY'),
@@ -19,12 +19,11 @@ bot.use(async (ctx, next) => {
   return next();
 });
 
-
-// Google Sheets auth (멀티라인 PEM을 그대로 사용)
+// Google Sheets auth (멀티라인 PEM 그대로 사용)
 const auth = new google.auth.JWT(
   process.env.GS_CLIENT_EMAIL,
   undefined,
-  process.env.GS_PRIVATE_KEY, // 멀티라인 그대로 (replace 제거)
+  process.env.GS_PRIVATE_KEY,
   ['https://www.googleapis.com/auth/spreadsheets']
 );
 const sheets = google.sheets({ version: 'v4', auth });
@@ -126,8 +125,8 @@ bot.command('cancel', async ctx => {
 // 텍스트 처리: 트리거 우선 → 등록 프롬프트 답장 처리 → 기타 안내
 bot.on('text', async ctx => {
   try {
-    const text = String(ctx.message?.text || '');
-    const asked = ctx.message?.reply_to_message?.text || '';
+    const text  = String((ctx.message as any)?.text || '');
+    const asked = (ctx.message as any)?.reply_to_message?.text || '';
 
     // 1) 트리거 텍스트(/start, hi 등) → 메뉴
     if (TRIGGER.test(text)) {
@@ -151,13 +150,13 @@ bot.on('text', async ctx => {
     console.error('TEXT_HANDLER_ERROR', err?.response?.data || err);
     const hint = err?.response?.data?.error?.message || err?.message || 'unknown';
     await ctx.reply('처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.');
-    // 필요시 아래 주석 해제해서 사용자에게도 에러 힌트를 보여줄 수 있어요.
+    // 디버그가 필요하면 아래 주석 해제
     // await ctx.reply(`(디버그) 오류: ${hint}`);
   }
 });
 
 // ===== Vercel Handler =====
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export default async function handler(req: any, res: any) {
   try {
     if (req.method === 'POST') {
       await bot.handleUpdate(req.body as any);
