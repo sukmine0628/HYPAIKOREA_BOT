@@ -18,9 +18,9 @@ const sheets = google.sheets({ version: 'v4', auth });
 const EMPLOYEE_SHEET_ID = process.env.GS_SHEET_ID!;
 const EMPLOYEE_SHEET = 'Chat_ID';
 
-// 구매 요청 시트 (별도 스프레드시트면 GS_PURCHASE_SHEET_ID를 환경변수로 추가)
+// 구매 요청 시트 (별도 스프레드시트면 GS_PURCHASE_SHEET_ID 설정)
 const PURCHASE_SHEET_ID = process.env.GS_PURCHASE_SHEET_ID || EMPLOYEE_SHEET_ID;
-const PURCHASE_SHEET = '구매요청'; // ❗️탭 이름 공백 없음(권장)
+const PURCHASE_SHEET = 'Purchase_List'; // ← 변경 반영
 
 /** ========== 직원 등록 저장 ========== */
 async function saveEmployee(chatId: string, name: string) {
