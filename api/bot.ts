@@ -60,7 +60,7 @@ async function savePurchase(chatId: string, name: string, item: string, qty: str
   // 구매 번호 자동 증가
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: PURCHASE_SHEET_ID,
-    range: `${PURCHASE_SHEET}!A2:A`,
+    range: `'${PURCHASE_SHEET}'!A2:A`,  // <-- 공백 탭 이름은 작은따옴표 필수
   });
   const rows = res.data.values || [];
   const last = rows.length > 0 ? rows[rows.length - 1][0] : null;
@@ -72,7 +72,7 @@ async function savePurchase(chatId: string, name: string, item: string, qty: str
 
   await sheets.spreadsheets.values.append({
     spreadsheetId: PURCHASE_SHEET_ID,
-    range: `${PURCHASE_SHEET}!A:M`,
+    range: `'${PURCHASE_SHEET}'!A:M`,  // <-- 여기에도 작은따옴표
     valueInputOption: 'USER_ENTERED',
     requestBody: {
       values: [[
