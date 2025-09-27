@@ -4,6 +4,7 @@ import { google } from 'googleapis';
 
 const bot = new Telegraf(process.env.BOT_TOKEN!);
 
+// Google Sheets auth
 const auth = new google.auth.JWT(
   process.env.GS_CLIENT_EMAIL,
   undefined,
@@ -15,8 +16,13 @@ const sheets = google.sheets({ version: 'v4', auth });
 const SHEET_ID = process.env.GS_SHEET_ID!;
 const SHEET_NAME = 'Chat_ID';
 
+// ===== Helpers =====
 async function saveRow(chatId: string, name: string) {
+  // 서버리스(콜드스타트) 환경에서 매 호출 인증 보장
+  await auth.authorize();
+
   const ts = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  // A열에서 chat_id 검색
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
     range: `${SHEET_NAME}!A2:A`,
@@ -26,25 +32,24 @@ async function saveRow(chatId: string, name: string) {
   for (let i = 0; i < rows.length; i++) {
     if (String(rows[i][0]) === chatId) { rowIndex = i + 2; break; }
   }
+
+  // 기존 행 갱신 또는 새 행 추가
   if (rowIndex > -1) {
     await sheets.spreadsheets.values.update({
       spreadsheetId: SHEET_ID,
       range: `${SHEET_NAME}!B${rowIndex}:E${rowIndex}`,
-      valueInputOption: 'RAW',
+      valueInputOption: 'USER_ENTERED',
       requestBody: { values: [[name, '', '', ts]] },
     });
   } else {
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
       range: `${SHEET_NAME}!A:E`,
-      valueInputOption: 'RAW',
+      valueInputOption: 'USER_ENTERED',
       requestBody: { values: [[chatId, name, '', '', ts]] },
     });
   }
 }
-
-const TRIGGER = /^(?:\/start|hi|hello|안녕|하이|헬로)\s*$/i;
-const mem = new Map<number, string>();
 
 function replyMenu(ctx: any) {
   return ctx.reply(
@@ -58,20 +63,27 @@ function replyMenu(ctx: any) {
   );
 }
 
+// ForceReply 프롬프트 문구 (답장 여부 판별에 사용)
+const REGISTER_PROMPT = '신규 직원 등록을 위해 성함을 입력해 주세요.';
+
+// ===== Triggers / Actions =====
+const TRIGGER = /^(?:\/start|start|hi|hello|안녕|하이|헬로)\s*$/i;
+
 bot.start(ctx => replyMenu(ctx));
 bot.hears(TRIGGER, ctx => replyMenu(ctx));
 
+// 상태 저장(Map) 대신 ForceReply로 “해당 메시지에 대한 답장인지”로 분기
 bot.action('register_start', async ctx => {
-  mem.set(ctx.chat!.id, 'awaiting_name');
   await ctx.answerCbQuery();
-  await ctx.reply(
-    '신규 직원 등록을 위해 성함을 입력해 주세요.',
-    Markup.inlineKeyboard([[Markup.button.callback('뒤로 가기', 'go_back')]])
-  );
+  // 1) 이름 입력 프롬프트(ForceReply)
+  await ctx.reply(REGISTER_PROMPT, { reply_markup: { force_reply: true } });
+  // 2) (선택) 뒤로 가기 버튼 별도 메시지로 유지
+  await ctx.reply('메뉴로 돌아가려면 아래를 누르세요.', Markup.inlineKeyboard([
+    [Markup.button.callback('뒤로 가기', 'go_back')],
+  ]));
 });
 
 bot.action('go_back', async ctx => {
-  mem.delete(ctx.chat!.id);
   await ctx.answerCbQuery();
   await replyMenu(ctx);
 });
@@ -82,45 +94,45 @@ bot.action('purchase_request', async ctx => {
 });
 
 bot.command('cancel', async ctx => {
-  mem.delete(ctx.chat!.id);
   await ctx.reply('취소되었습니다. /start 로 다시 시작하세요.');
 });
 
+// 사용자가 보낸 텍스트가 “등록 프롬프트에 대한 답장”인지로 판별하여 처리
 bot.on('text', async ctx => {
-  const state = mem.get(ctx.chat!.id);
-  if (state === 'awaiting_name') {
-    const name = ctx.message.text.trim().replace(/\s+/g, ' ').slice(0, 50);
-    if (!name) return;
-    await saveRow(String(ctx.chat!.id), name);
-    mem.delete(ctx.chat!.id);
-    await ctx.reply(`등록 완료 ✅\n이름: ${name}\nChat ID: ${ctx.chat!.id}`);
-    await replyMenu(ctx);
+  try {
+    const asked = ctx.message?.reply_to_message?.text || '';
+    if (asked.startsWith(REGISTER_PROMPT)) {
+      const name = String(ctx.message.text || '')
+        .trim()
+        .replace(/\s+/g, ' ')
+        .slice(0, 50);
+      if (!name) return;
+
+      await saveRow(String(ctx.chat!.id), name);
+      await ctx.reply(`등록 완료 ✅\n이름: ${name}\nChat ID: ${ctx.chat!.id}`);
+      return replyMenu(ctx);
+    }
+
+    // 기타 일반 텍스트: 안내만 (선택)
+    if (!TRIGGER.test(String(ctx.message.text))) {
+      await ctx.reply('메뉴로 돌아가려면 /start 를 입력하세요.');
+    }
+  } catch (err) {
+    console.error('TEXT_HANDLER_ERROR:', err);
+    await ctx.reply('처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.');
   }
 });
 
+// ===== Vercel Handler =====
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method === 'POST') {
-    try { await bot.handleUpdate(req.body as any); } catch (e) { console.error(e); }
+  try {
+    if (req.method === 'POST') {
+      await bot.handleUpdate(req.body as any);
+      return res.status(200).send('ok');
+    }
+    return res.status(200).send('ok'); // 헬스체크용
+  } catch (e) {
+    console.error('HANDLER_ERROR:', e);
     return res.status(200).send('ok');
   }
-  return res.status(200).send('ok');
 }
-
-
-
-// ⬇️ 이 블록을 다른 핸들러들(hears/action) 근처에 "그대로" 붙여 넣으세요.
-bot.command('name', async ctx => {
-  try {
-    const full = ctx.message?.text || '';
-    const name = full.replace(/^\/name(@\S+)?\s*/i, '').trim().replace(/\s+/g, ' ').slice(0, 50);
-    if (!name) {
-      return ctx.reply('이렇게 입력해 주세요: `/name 홍길동`', { parse_mode: 'Markdown' });
-    }
-    await saveRow(String(ctx.chat!.id), name);
-    await ctx.reply(`등록 완료 ✅\n이름: ${name}\nChat ID: ${ctx.chat!.id}`);
-    await replyMenu(ctx);
-  } catch (e) {
-    console.error('NAME_CMD_ERROR:', e);
-    await ctx.reply('등록 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.');
-  }
-});
