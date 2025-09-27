@@ -8,7 +8,7 @@ const bot = new Telegraf(process.env.BOT_TOKEN!);
 const auth = new google.auth.JWT(
   process.env.GS_CLIENT_EMAIL,
   undefined,
-  process.env.GS_PRIVATE_KEY, // 멀티라인 그대로 사용 (replace 제거)
+  process.env.GS_PRIVATE_KEY, // 멀티라인 그대로 (replace 제거)
   ['https://www.googleapis.com/auth/spreadsheets']
 );
 const sheets = google.sheets({ version: 'v4', auth });
@@ -18,37 +18,48 @@ const SHEET_NAME = 'Chat_ID';
 
 // ===== Helpers =====
 async function saveRow(chatId: string, name: string) {
-  // 서버리스(콜드스타트) 환경에서 매 호출 인증 보장
+  // 콜드스타트 대비: 매 호출 인증 보장
   await auth.authorize();
 
   const ts = new Date().toISOString().replace('T', ' ').slice(0, 19);
 
-  // A열에서 chat_id 검색
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: SHEET_ID,
-    range: `${SHEET_NAME}!A2:A`,
-  });
-  const rows = res.data.values || [];
-  let rowIndex = -1;
-  for (let i = 0; i < rows.length; i++) {
-    if (String(rows[i][0]) === chatId) { rowIndex = i + 2; break; }
-  }
+  try {
+    // A열에서 chat_id 검색
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: `${SHEET_NAME}!A2:A`,
+    });
+    const rows = res.data.values || [];
+    let rowIndex = -1;
+    for (let i = 0; i < rows.length; i++) {
+      if (String(rows[i][0]) === chatId) { rowIndex = i + 2; break; }
+    }
 
-  // 기존 행 갱신 또는 새 행 추가
-  if (rowIndex > -1) {
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SHEET_ID,
-      range: `${SHEET_NAME}!B${rowIndex}:E${rowIndex}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [[name, '', '', ts]] },
+    if (rowIndex > -1) {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SHEET_ID,
+        range: `${SHEET_NAME}!B${rowIndex}:E${rowIndex}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [[name, '', '', ts]] },
+      });
+    } else {
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: SHEET_ID,
+        range: `${SHEET_NAME}!A:E`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [[chatId, name, '', '', ts]] },
+      });
+    }
+  } catch (err: any) {
+    // 🔎 디버그용 상세 로그
+    const gErr = err?.response?.data || err;
+    console.error('SHEETS_ERROR', {
+      message: err?.message,
+      code: gErr?.error?.code,
+      status: gErr?.error?.status,
+      details: gErr?.error?.message || gErr,
     });
-  } else {
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: SHEET_ID,
-      range: `${SHEET_NAME}!A:E`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [[chatId, name, '', '', ts]] },
-    });
+    throw err; // 상위에서 사용자 안내
   }
 }
 
@@ -73,7 +84,6 @@ const TRIGGER = /^(?:\/start|start|hi|hello|안녕|하이|헬로)\s*$/i;
 bot.start(ctx => replyMenu(ctx));
 bot.hears(TRIGGER, ctx => replyMenu(ctx));
 
-// 상태(Map) 대신 ForceReply로 “해당 메시지에 대한 답장인지”로 식별
 bot.action('register_start', async ctx => {
   await ctx.answerCbQuery();
   await ctx.reply(REGISTER_PROMPT, { reply_markup: { force_reply: true } });
@@ -103,12 +113,12 @@ bot.on('text', async ctx => {
     const text = String(ctx.message?.text || '');
     const asked = ctx.message?.reply_to_message?.text || '';
 
-    // 1) 트리거 텍스트(/start, hi 등)는 어디서 오든 메뉴로!
+    // 1) 트리거 텍스트(/start, hi 등) → 메뉴
     if (TRIGGER.test(text)) {
       return replyMenu(ctx);
     }
 
-    // 2) 등록 프롬프트(ForceReply)에 대한 '답장'이면 이름 처리
+    // 2) 등록 프롬프트에 대한 '답장' → 시트 저장
     if (asked.startsWith(REGISTER_PROMPT)) {
       const name = text.trim().replace(/\s+/g, ' ').slice(0, 50);
       if (!name) return;
@@ -118,11 +128,15 @@ bot.on('text', async ctx => {
       return replyMenu(ctx);
     }
 
-    // 3) 그 외 일반 텍스트 → 가이드
+    // 3) 기타 일반 텍스트
     await ctx.reply('메뉴로 돌아가려면 /start 를 입력하세요.');
-  } catch (err) {
-    console.error('TEXT_HANDLER_ERROR:', err);
+  } catch (err: any) {
+    // 사용자에겐 짧게, 로그엔 자세히
+    console.error('TEXT_HANDLER_ERROR', err?.response?.data || err);
+    const hint = err?.response?.data?.error?.message || err?.message || 'unknown';
     await ctx.reply('처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.');
+    // 필요시 아래 주석 해제해서 사용자에게도 에러 힌트를 보여줄 수 있어요.
+    // await ctx.reply(`(디버그) 오류: ${hint}`);
   }
 });
 
@@ -135,7 +149,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     return res.status(200).send('ok'); // 헬스체크
   } catch (e) {
-    console.error('HANDLER_ERROR:', e);
+    console.error('HANDLER_ERROR', e);
     return res.status(200).send('ok');
   }
 }
