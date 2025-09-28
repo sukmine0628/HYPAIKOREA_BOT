@@ -14,13 +14,13 @@ const auth = new google.auth.JWT({
 const sheets = google.sheets({ version: 'v4', auth });
 
 /** ========== 시트 설정 ========== */
-// 직원 시트(이미 쓰던 것)
+// 직원 시트
 const EMPLOYEE_SHEET_ID = process.env.GS_SHEET_ID!;
 const EMPLOYEE_SHEET = 'Chat_ID';
-// F열에 '관리자'면 승인 담당자
-const EMPLOYEE_MANAGER_COL_INDEX = 5; // 0-based (A=0 ... F=5)
+// F열이 "관리자"면 승인 담당자 (0-based index → A:0 ... F:5)
+const EMPLOYEE_MANAGER_COL_INDEX = 5;
 
-// 구매요청 시트(분리 시 GS_PURCHASE_SHEET_ID, 아니면 직원 시트와 동일)
+// 구매요청 시트 (분리 시 GS_PURCHASE_SHEET_ID 설정, 없으면 직원 시트와 동일)
 const PURCHASE_SHEET_ID = process.env.GS_PURCHASE_SHEET_ID || EMPLOYEE_SHEET_ID;
 const PURCHASE_SHEET = 'Purchase_List';
 
@@ -28,10 +28,7 @@ const PURCHASE_SHEET = 'Purchase_List';
 async function authorize() {
   await auth.authorize();
 }
-
-function nowTS() {
-  return new Date().toISOString().replace('T', ' ').slice(0, 19);
-}
+const nowTS = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
 
 async function getEmployeeNameByChatId(chatId: string): Promise<string> {
   await authorize();
@@ -44,6 +41,7 @@ async function getEmployeeNameByChatId(chatId: string): Promise<string> {
   return hit?.[1] || '';
 }
 
+/** 관리자 리스트 (공백/대소문자 안전) + 디버그 로그 */
 async function getManagers(): Promise<Array<{ chatId: string, name: string }>> {
   await authorize();
   const res = await sheets.spreadsheets.values.get({
@@ -52,14 +50,17 @@ async function getManagers(): Promise<Array<{ chatId: string, name: string }>> {
   });
   const rows = res.data.values || [];
   const managers: Array<{ chatId: string, name: string }> = [];
+
   for (const r of rows) {
-    const chatId = r[0];
-    const name = r[1];
-    const role = r[EMPLOYEE_MANAGER_COL_INDEX]; // F열
-    if (chatId && role === '관리자') {
-      managers.push({ chatId, name: name || '' });
+    const chatId = (r?.[0] ?? '').toString().trim();
+    const name   = (r?.[1] ?? '').toString().trim();
+    const role   = (r?.[EMPLOYEE_MANAGER_COL_INDEX] ?? '').toString().trim();
+    // 공백 제거 후 '관리자' 정확 매칭
+    if (chatId && role.replace(/\s+/g, '') === '관리자') {
+      managers.push({ chatId, name });
     }
   }
+  console.log('ADMINS_DEBUG', { count: managers.length, managers });
   return managers;
 }
 
@@ -71,9 +72,7 @@ async function findPurchaseRowByNo(reqNo: string): Promise<number | null> {
   });
   const rows = res.data.values || [];
   for (let i = 0; i < rows.length; i++) {
-    if (String(rows[i][0]) === reqNo) {
-      return i + 2; // header offset
-    }
+    if (String(rows[i][0]) === reqNo) return i + 2; // header offset
   }
   return null;
 }
@@ -211,14 +210,21 @@ async function updateStatusRejected(reqNo: string, approverName: string, reason:
   return { already: false, row, curVals };
 }
 
-/** ========== 알림(브로드캐스트/요청자) ========== */
+/** ========== 알림 유틸 ========== */
 async function broadcastToManagers(text: string) {
   const managers = await getManagers();
+  let ok = 0, fail = 0;
   for (const m of managers) {
-    try { await bot.telegram.sendMessage(m.chatId, text); } catch {}
+    try {
+      await bot.telegram.sendMessage(m.chatId, text);
+      ok++;
+    } catch (e) {
+      console.error('ADMIN_DM_ERROR', { chatId: m.chatId, error: e?.response?.data || e });
+      fail++;
+    }
   }
+  console.log('ADMIN_DM_RESULT', { ok, fail });
 }
-
 async function notifyRequester(chatId: string, text: string) {
   try { await bot.telegram.sendMessage(chatId, text); } catch {}
 }
@@ -242,6 +248,16 @@ const TRIGGER = /^(?:\/start|start|hi|hello|안녕|하이|헬로)\s*$/i;
 bot.start(ctx => replyMenu(ctx));
 bot.hears(TRIGGER, ctx => replyMenu(ctx));
 
+/** 디버그: 관리자 인식 확인 */
+bot.command('debug_admins', async ctx => {
+  const admins = await getManagers();
+  await ctx.reply(
+    admins.length
+      ? '관리자 목록:\n' + admins.map(a => `- ${a.name || '(이름없음)'} (${a.chatId})`).join('\n')
+      : '관리자가 없습니다. Chat_ID 시트 F열에 "관리자"를 정확히 입력해 주세요.'
+  );
+});
+
 /** 구매 요청 상태머신 */
 type Stage = 'item' | 'qty' | 'price' | 'reason' | 'note';
 type PurchaseState = {
@@ -249,7 +265,6 @@ type PurchaseState = {
   data: { item?: string; qty?: string; price?: string; reason?: string; note?: string };
 };
 const purchaseMem = new Map<number, PurchaseState>();
-
 const ask = (ctx: any, message: string) =>
   ctx.reply(message, { reply_markup: { force_reply: true } });
 
@@ -296,7 +311,7 @@ bot.action('go_back', async ctx => {
   await replyMenu(ctx);
 });
 
-/** ========== 구매요청 입력 플로우 ========== */
+/** ========== 텍스트 처리 ========== */
 bot.on('text', async ctx => {
   try {
     const text = String((ctx.message as any)?.text || '').trim();
@@ -325,7 +340,6 @@ bot.on('text', async ctx => {
     // 반려 사유 입력(담당자)
     const rej = rejectMem.get(ctx.chat!.id);
     if (rej) {
-      // 권한 확인(담당자만)
       const managers = await getManagers();
       const ok = managers.some(m => String(m.chatId) === String(ctx.chat!.id));
       if (!ok) {
@@ -334,7 +348,7 @@ bot.on('text', async ctx => {
         return;
       }
 
-      const approverName = await getEmployeeNameByChatId(String(ctx.chat!.id)) || `User-${ctx.chat!.id}`;
+      const approverName = (await getEmployeeNameByChatId(String(ctx.chat!.id))) || `User-${ctx.chat!.id}`;
       const res = await updateStatusRejected(rej.reqNo, approverName, text);
       if (res.already) {
         await ctx.reply(`이미 처리된 구매요청 건입니다. (현재상태: ${res.status})`);
@@ -344,7 +358,7 @@ bot.on('text', async ctx => {
 
       const rowVals = res.curVals;
       const requesterChatId = rowVals[2]; // C열
-      // 브로드캐스트 & 요청자 통보
+
       await broadcastToManagers(
         `[구매 요청 처리 안내]\n${rej.reqNo} 요청이 ❌반려되었습니다.\n처리자: ${approverName}\n사유: ${text}`
       );
@@ -420,7 +434,7 @@ bot.on('text', async ctx => {
           `물품: ${data.item}\n수량: ${data.qty}\n가격: ${Number(data.price).toLocaleString()}`
         );
 
-        // 담당자에게 알림 + 버튼
+        // 담당자에게 알림 + 버튼 (전송 결과 로그 포함)
         const managers = await getManagers();
         const msg =
           `[구매 요청 알림]\n` +
@@ -429,16 +443,22 @@ bot.on('text', async ctx => {
           `물품: ${data.item}\n수량: ${data.qty} / 가격: ${Number(data.price).toLocaleString()}\n` +
           `사유: ${data.reason}\n비고: ${data.note}`;
 
-        const kb = Markup.inlineKeyboard([
-          [
-            Markup.button.callback('✅ 승인', `approve|${reqNo}`),
-            Markup.button.callback('❌ 반려', `reject|${reqNo}`),
-          ]
-        ]);
+        const replyMarkup = Markup.inlineKeyboard([
+          [Markup.button.callback('✅ 승인', `approve|${reqNo}`),
+           Markup.button.callback('❌ 반려',  `reject|${reqNo}`)]
+        ]).reply_markup;
 
+        let ok = 0, fail = 0;
         for (const m of managers) {
-          try { await bot.telegram.sendMessage(m.chatId, msg, kb); } catch {}
+          try {
+            await bot.telegram.sendMessage(m.chatId, msg, { reply_markup: replyMarkup });
+            ok++;
+          } catch (e) {
+            console.error('ADMIN_DM_ERROR', { chatId: m.chatId, error: e?.response?.data || e });
+            fail++;
+          }
         }
+        console.log('ADMIN_DM_RESULT', { ok, fail });
 
         return replyMenu(ctx);
       }
@@ -457,31 +477,17 @@ bot.action(/^approve\|(.+)$/, async ctx => {
     await ctx.answerCbQuery();
     const reqNo = ctx.match[1];
 
-    // 담당자 권한 확인
     const managers = await getManagers();
     const ok = managers.some(m => String(m.chatId) === String(ctx.from?.id));
     if (!ok) return ctx.reply('담당자 권한이 없습니다.');
 
-    const approverName =
-      (await getEmployeeNameByChatId(String(ctx.from!.id))) ||
-      `User-${ctx.from!.id}`;
-
+    const approverName = (await getEmployeeNameByChatId(String(ctx.from!.id))) || `User-${ctx.from!.id}`;
     const res = await updateStatusApproved(reqNo, approverName);
-    if (res.already) {
-      return ctx.reply(`이미 처리된 구매요청 건입니다. (현재상태: ${res.status})`);
-    }
+    if (res.already) return ctx.reply(`이미 처리된 구매요청 건입니다. (현재상태: ${res.status})`);
 
-    const row = res.row!;
-    const rowVals = res.curVals!;
-    const requesterChatId = rowVals[2]; // C열
-
-    await broadcastToManagers(
-      `[구매 요청 처리 안내]\n${reqNo} 요청이 ✅승인되었습니다.\n처리자: ${approverName}`
-    );
-    await notifyRequester(
-      requesterChatId,
-      `[구매 요청 결과]\n${reqNo} 요청이 ✅승인되었습니다.\n처리자: ${approverName}`
-    );
+    const requesterChatId = res.curVals![2]; // C열
+    await broadcastToManagers(`[구매 요청 처리 안내]\n${reqNo} 요청이 ✅승인되었습니다.\n처리자: ${approverName}`);
+    await notifyRequester(requesterChatId, `[구매 요청 결과]\n${reqNo} 요청이 ✅승인되었습니다.\n처리자: ${approverName}`);
     await ctx.reply('승인 처리되었습니다.');
   } catch (e: any) {
     console.error('APPROVE_ERROR', e?.response?.data || e);
@@ -494,7 +500,6 @@ bot.action(/^reject\|(.+)$/, async ctx => {
     await ctx.answerCbQuery();
     const reqNo = ctx.match[1];
 
-    // 담당자 권한 확인
     const managers = await getManagers();
     const ok = managers.some(m => String(m.chatId) === String(ctx.from?.id));
     if (!ok) return ctx.reply('담당자 권한이 없습니다.');
