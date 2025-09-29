@@ -503,7 +503,7 @@ bot.on('text', async ctx => {
         // 관리자 알림
         const managers = await getManagers();
         const msg =
-          `[구매 요청 알림]\n번호: ${reqNo}\n요청자: ${requesterName}(${ctx.chat!.id})\n` +
+          `[구매 요청 알림]\n번호: ${reqNo}\n요청자: ${requesterName}\n` +
           `물품: ${data.item}\n수량: ${data.qty} / 가격: ₩${Number(data.price).toLocaleString()}\n사유: ${data.reason}\n비고: ${data.note}`;
         const kb = Markup.inlineKeyboard([
           [Markup.button.callback('✅ 승인', `approve|${reqNo}`),
