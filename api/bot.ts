@@ -534,7 +534,6 @@ bot.action(/^approve\|(.+)$/, async ctx => {
     const requesterChatId = (res as any).curVals[2];
     await broadcastToManagers(`[구매 요청 처리 안내]\n${reqNo} 요청이 ✅승인되었습니다.\n처리자: ${approverName}`);
     await notifyRequester(requesterChatId, `[구매 요청 결과]\n${reqNo} 요청이 ✅승인되었습니다.\n처리자: ${approverName}`);
-    await ctx.reply('승인 처리되었습니다.');
   } catch { await ctx.reply('처리 중 오류가 발생했습니다.'); }
 });
 
