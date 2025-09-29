@@ -317,7 +317,7 @@ bot.action('purchase_menu', async ctx => {
   await ctx.answerCbQuery();
   const approved = await isApprovedEmployee(String(ctx.from!.id));
   if (!approved) {
-    return ctx.reply('사내 직원 승인(G열 "승인") 후 이용 가능합니다. 관리자에게 승인 요청을 해주세요.');
+    return ctx.reply('사내 직원 승인 후 이용이 가능한 메뉴입니다. 관리자에게 승인 요청을 해주세요.');
   }
   await ctx.reply(
     '구매 메뉴입니다. 원하시는 작업을 선택하세요.',
@@ -345,7 +345,7 @@ bot.action('purchase_request', async ctx => {
 bot.action('purchase_approve', async ctx => {
   await ctx.answerCbQuery();
   if (!(await isManager(String(ctx.from!.id)))) {
-    return ctx.reply('담당자 권한(F열 "관리자")이 없습니다.');
+    return ctx.reply('해당 메뉴에 대한 권한이 없습니다. 관리자에게 문의해주세요.');
   }
   const pend = await listAllPending(20);
   if (!pend.length) return ctx.reply('대기중인 구매 요청이 없습니다.');
