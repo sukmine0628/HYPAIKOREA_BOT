@@ -268,13 +268,15 @@ bot.action('purchase_menu', async ctx => {
   await ctx.reply(
     '구매 메뉴입니다. 원하시는 작업을 선택하세요.',
     Markup.inlineKeyboard([
-      [ Markup.button.callback('구매 요청', 'purchase_request'),
-        Markup.button.callback('구매 승인', 'purchase_approve') ],
-      [ Markup.button.callback('내 요청 보기', 'my_requests') ],
-      [ Markup.button.callback('뒤로 가기', 'go_back') ],
-    ])
-  );
-});
+  [
+    Markup.button.callback('구매 요청', 'purchase_request'),
+    Markup.button.callback('구매 승인', 'purchase_approve')
+  ],
+  [
+    Markup.button.callback('내 요청 보기', 'my_requests'),
+    Markup.button.callback('뒤로 가기', 'go_back')
+  ]
+])
 
 bot.action('purchase_request', async ctx => {
   await ctx.answerCbQuery();
