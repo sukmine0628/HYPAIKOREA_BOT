@@ -26,6 +26,9 @@ const PURCHASE_SHEET = 'Purchase_List';
 
 const CANCELLED_SHEET = 'Purchase_Cancelled'; // 취소 로그(공번 처리용 감지)
 
+/** ===== Mgmt Support Settings ===== */
+const MGMT_SUPPORT_CHAT_ID = '-4906337098'; // 경영지원 요청이 도착할 대상(그룹/채널) Chat ID
+
 /** ===== Utils ===== */
 async function authorize() { await auth.authorize(); }
 const nowDate = () => {
@@ -289,6 +292,9 @@ function replyMenu(ctx: any) {
         Markup.button.callback('신규 직원 등록', 'register_start'),
         Markup.button.callback('구매 요청 및 승인', 'purchase_menu'),
       ],
+      [
+        Markup.button.callback('경영지원 요청', 'support_request'),
+      ],
     ])
   );
 }
@@ -307,6 +313,12 @@ const ask = (ctx: any, message: string) => ctx.reply(message, { reply_markup: { 
 
 const rejectMem = new Map<number, { reqNo: string }>(); // 담당자 반려 사유
 const cancelMem = new Map<number, { reqNo: string }>(); // 요청자 취소 사유
+
+// === 경영지원 요청 상태 ===
+type SupportStage = 'content' | 'deadline';
+type SupportState = { stage: SupportStage; data: { content?: string; deadline?: string } };
+const supportMem = new Map<number, SupportState>();
+const supportConfirm = new Map<number, { content: string; deadline: string }>();
 
 /** 액션들 */
 bot.action('register_start', async ctx => {
@@ -391,7 +403,57 @@ bot.action('purchase_mylist', async ctx => {
 
 bot.action('go_back', async ctx => {
   purchaseMem.delete(ctx.chat!.id);
+  supportMem.delete(ctx.chat!.id);
   await replyMenu(ctx);
+});
+
+// === 경영지원 요청 시작 ===
+bot.action('support_request', async ctx => {
+  await ctx.answerCbQuery();
+  const approved = await isApprovedEmployee(String(ctx.from!.id));
+  if (!approved) return ctx.reply('사내 직원 승인 후 이용 가능합니다.');
+
+  supportMem.set(ctx.chat!.id, { stage: 'content', data: {} });
+  await ctx.reply(
+    '경영 지원 요청 메뉴입니다. 아래에 요청사항을 작성해주세요.\n① 요청내용을 입력해 주세요.',
+    { reply_markup: { force_reply: true } }
+  );
+});
+
+// === 경영지원 요청 전송/취소 콜백 ===
+bot.action('support_send', async ctx => {
+  try {
+    await ctx.answerCbQuery();
+    const draft = supportConfirm.get(ctx.from!.id);
+    if (!draft) return ctx.reply('요청 정보가 없습니다. 처음부터 다시 진행해 주세요.');
+
+    const requesterName = (await getEmployeeNameByChatId(String(ctx.from!.id))) || `User-${ctx.from!.id}`;
+    const msg =
+      `[경영지원 요청]\n` +
+      `요청자: ${requesterName}\n` + // ID는 표시하지 않음(내부정책)
+      `요청내용: ${draft.content}\n` +
+      `요청기한: ${draft.deadline}\n` +
+      `요청일: ${nowDate()}`;
+
+    try { await bot.telegram.sendMessage(MGMT_SUPPORT_CHAT_ID, msg); } catch {}
+
+    supportConfirm.delete(ctx.from!.id);
+    await ctx.reply('요청이 경영지원팀에 전달되었습니다. 감사합니다.');
+    return replyMenu(ctx);
+  } catch {
+    await ctx.reply('처리 중 오류가 발생했습니다.');
+  }
+});
+
+bot.action('support_cancel', async ctx => {
+  try {
+    await ctx.answerCbQuery();
+    supportConfirm.delete(ctx.from!.id);
+    await ctx.reply('요청이 취소되었습니다.');
+    return replyMenu(ctx);
+  } catch {
+    await ctx.reply('처리 중 오류가 발생했습니다.');
+  }
 });
 
 /** 텍스트 입력 처리 */
@@ -402,6 +464,7 @@ bot.on('text', async ctx => {
 
     if (/^\/cancel$/i.test(text)) {
       purchaseMem.delete(ctx.chat!.id); rejectMem.delete(ctx.chat!.id); cancelMem.delete(ctx.chat!.id);
+      supportMem.delete(ctx.chat!.id); supportConfirm.delete(ctx.chat!.id);
       await ctx.reply('취소되었습니다. /start 로 다시 시작하세요.'); return;
     }
 
@@ -460,7 +523,38 @@ bot.on('text', async ctx => {
       return ctx.reply('요청이 취소되었습니다.');
     }
 
-    // 구매요청 플로우
+    // === 경영지원 요청 플로우 ===
+    const sState = supportMem.get(ctx.chat!.id);
+    if (sState) {
+      const data = sState.data;
+
+      if (sState.stage === 'content') {
+        data.content = text.slice(0, 1000);
+        sState.stage = 'deadline';
+        return ask(ctx, '② 요청기한을 입력해 주세요. (예: 2025-10-10, 이번주 금요일, 긴급 등)');
+      }
+
+      if (sState.stage === 'deadline') {
+        data.deadline = text.slice(0, 200);
+        // 요약 및 확인
+        const requesterName = (await getEmployeeNameByChatId(String(ctx.chat!.id))) || `User-${ctx.chat!.id}`;
+        const summary =
+          `아래 내용으로 요청하시겠습니까?\n\n` +
+          `— 요청자: ${requesterName}\n` + // 표시만, ID 비노출
+          `— 요청내용: ${data.content}\n` +
+          `— 요청기한: ${data.deadline}`;
+
+        supportConfirm.set(ctx.chat!.id, { content: data.content!, deadline: data.deadline! });
+        supportMem.delete(ctx.chat!.id);
+
+        const kb = Markup.inlineKeyboard([
+          [Markup.button.callback('📨 요청 보내기', 'support_send'), Markup.button.callback('취소', 'support_cancel')],
+        ]);
+        return ctx.reply(summary, kb);
+      }
+    }
+
+    // === 구매요청 플로우 ===
     const state = purchaseMem.get(ctx.chat!.id);
     if (state) {
       const data = state.data;
@@ -503,7 +597,7 @@ bot.on('text', async ctx => {
         // 관리자 알림
         const managers = await getManagers();
         const msg =
-          `[구매 요청 알림]\n번호: ${reqNo}\n요청자: ${requesterName}\n` +
+          `[구매 요청 알림]\n번호: ${reqNo}\n요청자: ${requesterName}\n` + // Chat ID 비노출
           `물품: ${data.item}\n수량: ${data.qty} / 가격: ₩${Number(data.price).toLocaleString()}\n사유: ${data.reason}\n비고: ${data.note}`;
         const kb = Markup.inlineKeyboard([
           [Markup.button.callback('✅ 승인', `approve|${reqNo}`),
